@@ -1,0 +1,208 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+
+import datetime
+import githubgql
+import json
+import os
+import sys
+
+QUERY = """
+query($org:String!, $repo:String!, $prCursor:String, $prAssigneesCursor:String, $prEventsCursor:String) {
+  repository(owner: $org, name: $repo) {
+    pullRequests(first:100, states:OPEN, after:$prCursor) {
+      pageInfo { endCursor hasNextPage }
+      nodes {
+        ...on PullRequest {
+          id
+          number
+          author {
+            ...userData
+          }
+          assignees(first:100, after:$prAssigneesCursor) {
+            pageInfo { endCursor hasNextPage }
+            nodes {
+              ...userData
+            }
+          }
+          timelineItems(first:100, after:$prEventsCursor) {
+            pageInfo { endCursor hasNextPage }
+            nodes {
+              __typename
+              ...on PullRequestReview {
+                who: author {
+                  ...userData
+                }
+                what: state
+                when: createdAt
+              }
+              ...on ReviewRequestedEvent {
+                who: requestedReviewer {
+                  ...userData
+                }
+                what: __typename
+                when: createdAt
+              }
+              ...on ReviewRequestRemovedEvent {
+                who: requestedReviewer {
+                  ...userData
+                }
+                what: __typename
+                when: createdAt
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+fragment userData on User {
+  login
+  id
+}
+"""
+
+QUERY_CURSORS = {
+    'prCursor': {
+        'path': ["repository", "pullRequests"],
+        'next': {
+            'prAssigneesCursor': ["assignees"],
+            'prEventsCursor': ["timelineItems"],
+        }
+    }
+}
+
+class Override(Exception):
+    def __init__(self, responsible):
+        self.responsible = responsible
+
+def iterusers(nested_dictionary):
+    "Flattens all users from returned GraphQL data."
+
+    for key, value in nested_dictionary.items():
+        if key in ["author", "who"]:
+            if len(value) > 0:
+              yield value
+        elif key == "assignees":
+            for node in nested_dictionary[key]['nodes']:
+                if len(node) > 0:
+                  yield node
+        elif key == "nodes":
+            for node in nested_dictionary[key]:
+                yield from iterusers(node)
+        elif type(value) is dict:
+            yield from iterusers(value)
+
+def merge_events_and_reviews(pr):
+    "Gets a summary of all events on a PR by merging issue events and reviews."
+
+    for e in pr['timelineItems']['nodes']:
+        if e['__typename'] not in ("PullRequestReview", "ReviewRequestedEvent", "ReviewRequestRemovedEvent"):
+            continue
+        yield {
+            "when": e['when'],
+            "what": e['what'],
+            "who": e['who']['login']
+        }
+
+def get_responsible(pr):
+    "Yields the users responsible for a PR or raises Override(responsible)."
+
+    # Our strategy in this function is to reverse iterate through the events
+    # of each PR participant trying to find the most recent event that assigns
+    # responsibility. Some event types assign responsiblity. Others do not
+    # assign responsibility. Still others modify the effects of earlier events.
+    # The last event which assigns responsibility is the one that we choose.
+
+    events = sorted(merge_events_and_reviews(pr), key=lambda x: x["when"])
+    author = pr['author'].get('login')
+    participants = {x["who"] for x in events} - {author}
+    segregated = {u: [x["what"] for x in events if x["who"] == u] for u in participants}
+
+    for (who, whats) in segregated.items():
+        unrequested = False
+        for what in reversed(whats):
+            if what == "ReviewRequestedEvent" and not unrequested:
+                yield who
+            elif what in ("DISMISSED", "PENDING"):
+                yield who
+            elif what == "CHANGES_REQUESTED":
+                if author is None:
+                    continue
+                raise Override({author})
+            elif what == "APPROVED":
+                break # Neither PR author nor reviewer are responsible.
+            else:
+                if what == "ReviewRequestRemovedEvent":
+                    unrequested = True
+                continue
+            break
+
+if os.environ["GITHUB_EVENT_NAME"] != "schedule":
+    sys.exit(0)
+
+org, repo = os.environ["GITHUB_REPOSITORY"].split("/")
+
+try:
+    pr_data = githubgql.graphql(QUERY, org=org, repo=repo, cursor=QUERY_CURSORS)
+except githubgql.TokenError as e:
+    print(e.error)
+    sys.exit(0)
+
+# Create a login:id lookup table.
+login_to_id = {u["login"]: u["id"] for u in iterusers(pr_data)}
+
+for pr in pr_data['repository']['pullRequests']['nodes']:
+    slug = f"{org}/{repo}#{pr['number']}"
+    try:
+        responsible = set(get_responsible(pr))
+    except Override as e:
+        responsible = set(e.responsible)
+
+    assignees = {a['login'] for a in pr['assignees']['nodes']}
+
+    remove = assignees - responsible
+    needed = responsible - assignees
+
+    print(f"{slug}:", end='')
+    for u in needed:
+        print(f" +{u}", end='')
+    for u in remove:
+        print(f" -{u}", end='')
+    print()
+
+    if remove:
+        ids_to_remove = [login_to_id[l] for l in remove]
+        input = {
+          "assignableId": pr["id"],
+          "assigneeIds": ids_to_remove
+        }
+        githubgql.graphql(
+            """
+            mutation($input:RemoveAssigneesFromAssignableInput!) {
+                removeAssigneesFromAssignable(input:$input) {
+                    clientMutationId
+                }
+            }
+            """,
+            input=input
+        )
+
+    if needed:
+        ids_to_add = [login_to_id[l] for l in needed]
+        input = {
+          "assignableId": pr["id"],
+          "assigneeIds": ids_to_add
+        }
+        githubgql.graphql(
+            """
+            mutation($input:AddAssigneesToAssignableInput!) {
+                addAssigneesToAssignable(input:$input) {
+                    clientMutationId
+                }
+            }
+            """,
+            input=input
+        )

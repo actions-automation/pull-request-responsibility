@@ -1,0 +1,171 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+
+import githubgql
+import json
+import os
+import random
+import sys
+
+QUERY_PR = """
+query($pr:ID!, $team:String!, $reviewRequestsCursor:String, $reviewsCursor:String, $teamMembersCursor:String) {
+    node(id:$pr) {
+        ... on PullRequest {
+            number
+            suggestedReviewers {
+                reviewer {
+                    ...userData
+                }
+            }
+            reviewRequests(first:100, after:$reviewRequestsCursor) {
+                pageInfo { endCursor hasNextPage }
+                nodes{
+                    requestedReviewer {
+                        ...userData
+                    }
+                }
+            }
+            reviews(first:100, after:$reviewsCursor) {
+                pageInfo { endCursor hasNextPage }
+                nodes {
+                    author {
+                        ...userData
+                    }
+                }
+            }
+            baseRepository {
+                owner {
+                    ... on Organization {
+                        team(slug: $team) {
+                            members(first: 100, after:$teamMembersCursor) {
+                                pageInfo { endCursor hasNextPage }
+                                nodes {
+                                    ...userData
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fragment userData on User {
+    login
+    id
+    status {
+        indicatesLimitedAvailability
+    }
+}
+"""
+
+QUERY_PR_CURSORS = {
+    "reviewRequestsCursor": ['node', 'reviewRequests'],
+    "reviewsCursor": ['node', 'reviews'],
+    "teamMembersCursor": ['node', 'baseRepository', 'owner', 'team', 'members']
+}
+
+MUTATION_REQUEST_REVIEW = """
+mutation($input:RequestReviewsInput!) {
+    requestReviews(input:$input) {
+        clientMutationId
+    }
+}
+"""
+
+def migrate(dst, src, max=None):
+    "Moves random users from src to dst until src is exhausted or dst is full."
+
+    # Randomly selected users who have set their GitHub status to `busy` are
+    # removed from src but are not added to dst.
+
+    while len(src) > 0 and (max is None or len(dst) < max):
+        one = random.sample(src, 1)[0]
+        src.remove(one)
+
+        status = availability[one]
+        if status is None or not status["indicatesLimitedAvailability"]:
+            dst.add(one)
+
+def iterusers(nested_dictionary):
+    "Creates a flattened list of users from returned GraphQL data."
+
+    for key, value in nested_dictionary.items():
+        if key in ["requestedReviewer", "author"]:
+            yield value
+        elif key == "members":
+            for node in nested_dictionary[key]['nodes']:
+                yield node
+        elif key == "nodes":
+            for node in nested_dictionary[key]:
+                yield from iterusers(node)
+        elif type(value) is dict:
+            yield from iterusers(value)
+
+if os.environ["GITHUB_EVENT_NAME"] != "pull_request_target":
+    sys.exit(0)
+
+with open(os.environ["GITHUB_EVENT_PATH"]) as f:
+    event = json.load(f)
+
+if event["action"] not in {"opened", "reopened"}:
+    sys.exit(0)
+
+# Extract relevant data from event/environment.
+pr = event['pull_request']['node_id']
+org = event['organization']['node_id']
+
+# Query the PR for all relevant users and status info.
+try:
+    pr_data = githubgql.graphql(QUERY_PR, pr=pr, team="reviews", cursors=QUERY_PR_CURSORS)
+except githubgql.TokenError as e:
+    print(e.error)
+    sys.exit(0)
+
+# Create lookup tables for ease of use.
+login_to_id = {u["login"]: u["id"] for u in iterusers(pr_data)}
+availability = {u["login"]: u["status"] for u in iterusers(pr_data)}
+
+# All members of the `reviews` team in the parent org.
+potential_reviewers = {u["login"] for u in pr_data['node']['baseRepository']['owner']['team']['members']['nodes']}
+
+# All currently requested reviewers.
+requested = {r['author']['login'] for r in pr_data['node']['reviews']['nodes']}
+requested |= {r['requestedReviewer']['login'] for r in pr_data['node']['reviewRequests']['nodes']}
+
+# Get our categories.
+reviewers = potential_reviewers.copy()
+suggested = {s['reviewer']['login'] for s in pr_data['node']['suggestedReviewers']}
+authors = {event['pull_request']['user']['login']}
+owners = {"npmccallum"}
+
+# Make sure categories are mutually exclusive.
+reviewers -= authors | owners | suggested
+suggested -= authors | owners
+owners -= authors
+
+requesting = requested.copy()     # Existing reviewers
+migrate(requesting, owners)       # Get all owners.
+migrate(requesting, suggested, 2) # Get some suggested, leave room for non-suggested.
+migrate(requesting, reviewers, 3) # Get some non-suggested.
+migrate(requesting, suggested, 3) # Backfill from suggested.
+
+# Print status.
+print(f"{os.environ['GITHUB_REPOSITORY']}#{pr_data['node']['number']}:", end="")
+for user in sorted(requesting):
+    state = "" if user in requested else "+"
+    print(f" {state}{user}", end="")
+print()
+
+# Construct the final list of people to request as reviewers.
+to_request = [login_to_id[r] for r in requesting - requested]
+
+if len(to_request) > 0:
+    # Make the request to Github.
+    githubgql.graphql(MUTATION_REQUEST_REVIEW, input={
+        "pullRequestId": pr,
+        "userIds": to_request,
+        "teamIds": [],
+        "union": True
+    })

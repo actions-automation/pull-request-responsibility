@@ -1,0 +1,18 @@
+name: pr-workflow
+description: Github-native automation for pull requests
+
+branding:
+  icon: zap
+  color: gray-dark
+
+runs:
+  using: "composite"
+  steps:
+    - run: echo " --- REQUEST --- " && $GITHUB_ACTION_PATH/src/request
+      shell: bash
+    - run: echo " --- ASSIGN --- " && $GITHUB_ACTION_PATH/src/assign
+      shell: bash
+    - run: bash -c "env | sort"
+      shell: bash
+    - run: cat $GITHUB_EVENT_PATH
+      shell: bash
