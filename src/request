@@ -115,10 +115,12 @@ if event["action"] not in {"opened", "reopened"}:
 # Extract relevant data from event/environment.
 pr = event['pull_request']['node_id']
 org = event['organization']['node_id']
+team_name = sys.argv[1]
+num_to_request = sys.argv[2]
 
 # Query the PR for all relevant users and status info.
 try:
-    pr_data = githubgql.graphql(QUERY_PR, pr=pr, team="reviews", cursors=QUERY_PR_CURSORS)
+    pr_data = githubgql.graphql(QUERY_PR, pr=pr, team=team_name, cursors=QUERY_PR_CURSORS)
 except githubgql.TokenError as e:
     print(e.error)
     sys.exit(0)
@@ -127,7 +129,7 @@ except githubgql.TokenError as e:
 login_to_id = {u["login"]: u["id"] for u in iterusers(pr_data)}
 availability = {u["login"]: u["status"] for u in iterusers(pr_data)}
 
-# All members of the `reviews` team in the parent org.
+# All members of the specified `reviews` team in the parent org.
 potential_reviewers = {u["login"] for u in pr_data['node']['baseRepository']['owner']['team']['members']['nodes']}
 
 # All currently requested reviewers.
@@ -138,18 +140,16 @@ requested |= {r['requestedReviewer']['login'] for r in pr_data['node']['reviewRe
 reviewers = potential_reviewers.copy()
 suggested = {s['reviewer']['login'] for s in pr_data['node']['suggestedReviewers']}
 authors = {event['pull_request']['user']['login']}
-owners = {"npmccallum"}
 
 # Make sure categories are mutually exclusive.
-reviewers -= authors | owners | suggested
-suggested -= authors | owners
-owners -= authors
+reviewers -= authors | suggested
+suggested -= authors
 
 requesting = requested.copy()     # Existing reviewers
-migrate(requesting, owners)       # Get all owners.
-migrate(requesting, suggested, 2) # Get some suggested, leave room for non-suggested.
-migrate(requesting, reviewers, 3) # Get some non-suggested.
-migrate(requesting, suggested, 3) # Backfill from suggested.
+if len(requesting) < num_to_request:
+    migrate(requesting, suggested, len(requesting) + 1) # Get one suggested.
+migrate(requesting, reviewers, num_to_request) # Get some non-suggested.
+migrate(requesting, suggested, num_to_request) # Backfill from suggested.
 
 # Print status.
 print(f"{os.environ['GITHUB_REPOSITORY']}#{pr_data['node']['number']}:", end="")

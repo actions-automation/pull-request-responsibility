@@ -5,10 +5,23 @@ branding:
   icon: zap
   color: gray-dark
 
+inputs:
+  reviewers:
+    description: >
+      The Github team to pull reviewers from. Must be a valid team name from the
+      repository's parent organization.
+
+      For example: "reviewers"
+    required: true
+    default: ''
+  num_to_request:
+    description: >
+      The number of reviewers to request on PRs. Provide an integer.
+    required: true
 runs:
   using: "composite"
   steps:
-    - run: echo " --- REQUEST --- " && $GITHUB_ACTION_PATH/src/request
+    - run: echo " --- REQUEST --- " && $GITHUB_ACTION_PATH/src/request "${{ inputs.reviewers }}" "${{ inputs.num_to_request }}"
       shell: bash
     - run: echo " --- ASSIGN --- " && $GITHUB_ACTION_PATH/src/assign
       shell: bash
