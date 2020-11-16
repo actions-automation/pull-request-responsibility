@@ -146,7 +146,7 @@ reviewers -= authors | suggested
 suggested -= authors
 
 requesting = requested.copy()     # Existing reviewers
-if len(requesting) < num_to_request:
+if len(requesting) < int(num_to_request):
     migrate(requesting, suggested, len(requesting) + 1) # Get one suggested.
 migrate(requesting, reviewers, num_to_request) # Get some non-suggested.
 migrate(requesting, suggested, num_to_request) # Backfill from suggested.
