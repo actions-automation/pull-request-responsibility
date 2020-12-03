@@ -1,0 +1,71 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+
+import githubgql
+
+import json
+import sys
+import os
+
+MERGEABLE_QUERY = '''
+query($owner:String!, $repo:String!, $cursor:String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequests(states: OPEN, first: 100, after:$cursor) {
+      pageInfo { endCursor hasNextPage }
+      nodes {
+        id
+        number
+        mergeable
+        mergeStateStatus
+      }
+    }
+  }
+}
+'''
+
+MERGE_MUTATION = '''
+mutation($input: MergePullRequestInput!) {
+  mergePullRequest(input: $input) {
+    __typename
+  }
+}
+'''
+
+if os.environ["GITHUB_EVENT_NAME"] != "schedule":
+  sys.exit(0)
+
+owner, repo = os.environ["GITHUB_REPOSITORY"].split("/")
+cursors = {"cursor": ["repository", "pullRequests"]}
+
+try:
+    result = githubgql.graphql(MERGEABLE_QUERY, cursors=cursors, owner=owner, repo=repo)
+except githubgql.TokenError as e:
+    print(e.error)
+    sys.exit(0)
+
+prs = {i["id"]: i for i in result["repository"]["pullRequests"]["nodes"]}
+
+# Print column keys.
+print("")
+print(" Expected to merge? | Repository + PR number | Mergeable? | State  ")
+print("------------------------------------------------------------------")
+
+for (id, pr) in prs.items():
+    # Status strings.
+    merged_indicator = "✗"
+    pr_identifier = f"{owner}/{repo}#{pr['number']}"
+
+    # If all merge criteria pass, PR should be ready to merge.
+    if pr["mergeable"] == "MERGEABLE" and pr["mergeStateStatus"] == "CLEAN":
+        merged_indicator = "✓"
+
+    # List the status of the pull request before attempting to merge.
+    print(f" {merged_indicator:19}| {pr_identifier:23}| {str(pr['mergeable']):11}| {pr['mergeStateStatus']:17}")
+
+    # Attempt to merge the PR if ready.
+    if merged_indicator == "✓":
+        githubgql.graphql(MERGE_MUTATION, input={
+                "pullRequestId": id,
+                "mergeMethod": "REBASE"
+            }
+        )

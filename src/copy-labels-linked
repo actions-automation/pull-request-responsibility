@@ -1,0 +1,161 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+
+import githubgql
+
+import json
+import sys
+import os
+import re
+
+# We don't want to copy all labels on linked issues; ignore those in this subset.
+BLOCKED_LABELS_NAMES = {
+    "meta",
+    "question",
+    "help wanted",
+    "good first issue",
+    "duplicate",
+}
+
+QUERY = '''
+query($id:ID!, $org:String!, $repo:String!, $commitsCursor:String, $prLabelsCursor:String, $issuesCursor:String, $issuesLabelsCursor:String) {
+    node(id:$id) {
+        ... on PullRequest {
+            number
+            id
+            body
+            commits(first:100, after:$commitsCursor) {
+                pageInfo { endCursor hasNextPage }
+                nodes {
+                    commit {
+                        message
+                    }
+                }
+            }
+            labels(first:100, after:$prLabelsCursor) {
+                pageInfo { endCursor hasNextPage }
+                nodes {
+                    name
+                    id
+                }
+            }
+        }
+    }
+    repository(owner:$org, name:$repo) {
+        issues(first:100, states:OPEN, after:$issuesCursor) {
+            pageInfo { endCursor hasNextPage }
+            nodes {
+                ...on Issue {
+                    number
+                    labels(first:100, after:$issuesLabelsCursor) {
+                        pageInfo { endCursor hasNextPage }
+                        nodes {
+                            name
+                            id
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+'''
+
+QUERY_CURSORS = {
+    "commitsCursor": ["node", "commits"],
+    "prLabelsCursor": ["node", "labels"],
+    "issuesCursor": {
+        "path": ["repository", "issues"],
+        "next": {
+            "issuesLabelsCursor": ["labels"]
+        }
+    }
+}
+
+# Get all issue numbers related to a PR.
+def get_related_issues(body, commits):
+    # Regex to pick out closing keywords.
+    regex = re.compile("(close[sd]?|fix|fixe[sd]?|resolve[sd]?)\s*:?\s+#(\d+)", re.I)
+
+    # Extract all associated issues from closing keyword in PR
+    for verb, num in regex.findall(body):
+        yield int(num)
+
+    # Extract all associated issues from PR commit messages
+    for c in commits:
+        for verb, num in regex.findall(c["commit"]["message"]):
+            yield int(num)
+
+if os.environ["GITHUB_EVENT_NAME"] not in ["pull_request_target"]:
+    sys.exit(0)
+
+with open(os.environ["GITHUB_EVENT_PATH"]) as f:
+    event = json.load(f)
+
+if event["action"] not in {"opened", "reopened"}:
+    sys.exit(0)
+
+owner, repo = os.environ["GITHUB_REPOSITORY"].split("/")
+id = event['pull_request']['node_id']
+
+# Get PR data and open issues in the repo.
+try:
+    result = githubgql.graphql(
+        QUERY,
+        id=id,
+        org=owner,
+        repo=repo,
+        cursors=QUERY_CURSORS
+    )
+except githubgql.TokenError as e:
+    print(e.error)
+    sys.exit(0)
+
+# Create a lookup table for issue labels by number.
+issue_to_labels = {i['number']: i['labels']['nodes'] for i in result['repository']['issues']['nodes']}
+
+# Using the above lookup table, create a list of all labels present on linked issues.
+related_labels = []
+for i in get_related_issues(result['node']['body'], result['node']['commits']['nodes']):
+    related_label = issue_to_labels.get(i, None)
+    if related_label is not None:
+        related_labels += related_label
+
+# Construct sets of labels present on the PR as well as labels present on linked
+# issues.
+related_labels_names = {l['name'] for l in related_labels}
+pr_labels_names = {l['name'] for l in result['node']['labels']['nodes']}
+
+# Find the set of all labels we want to copy that aren't already set on the PR.
+unset_labels = related_labels_names - BLOCKED_LABELS_NAMES - pr_labels_names
+
+# Print status.
+to_set = pr_labels_names | unset_labels
+print(f"{owner}/{repo}#{result['node']['number']}:", end="")
+for label in sorted(to_set):
+    state = "" if label in pr_labels_names else "+"
+    print(f" {state}'{label}'", end="")
+print()
+
+# If there is at least one label unset, add the unset labels.
+if len(unset_labels) > 0:
+    # Create a lookup table for related label IDs.
+    label_to_id = {l['name']: l['id'] for l in related_labels}
+
+    # Get a list of IDs for all unset labels.
+    unset_labels_ids = [label_to_id[i] for i in unset_labels]
+
+    # Add the unset labels to the PR.
+    githubgql.graphql(
+        """
+        mutation($input:AddLabelsToLabelableInput!) {
+            addLabelsToLabelable(input:$input) {
+                clientMutationId
+            }
+        }
+        """,
+        input={
+            "labelableId": result['node']['id'],
+            "labelIds": unset_labels_ids
+        }
+    )
