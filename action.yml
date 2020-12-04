@@ -19,12 +19,27 @@ inputs:
       The number of reviewers to request on PRs. Provide an integer.
     required: true
     default: 0
+  opt_outs:
+    description: >
+      All scripts are run by default. If you don't want to run a specific
+      script, provide its name here to opt out.
+
+      For example, to opt out of "merge" and "copy-labels-linked":
+      merge,copy-labels-linked
+    required: false
+    default: ''
 runs:
   using: "composite"
   steps:
-    - run: echo " --- REQUEST --- " && $GITHUB_ACTION_PATH/src/request "${{ inputs.reviewers }}" "${{ inputs.num_to_request }}"
+    - run: >
+        if [[ ! "${{ inputs.opt_outs }}" =~ (^|,)"request"(,|$) ]]; then
+          echo " --- REQUEST --- " && $GITHUB_ACTION_PATH/src/request "${{ inputs.reviewers }}" "${{ inputs.num_to_request }}"
+        fi
       shell: bash
-    - run: echo " --- ASSIGN --- " && $GITHUB_ACTION_PATH/src/assign
+    - run: >
+        if [[ ! "${{ inputs.opt_outs }}" =~ (^|,)"assign"(,|$) ]]; then
+          echo " --- ASSIGN --- " && $GITHUB_ACTION_PATH/src/assign
+        fi
       shell: bash
     - run: bash -c "env | sort"
       shell: bash
