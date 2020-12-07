@@ -1,4 +1,4 @@
-name: pull-request-lifecycle
+name: pull-request-responsibility
 description: Github-native automation for pull requests
 
 branding:
@@ -6,38 +6,52 @@ branding:
   color: gray-dark
 
 inputs:
+  actions:
+    description: >
+      The set of actions to be run on pull requests. If not provided, only
+      "assign" will be run by default.
+
+      Provide a comma-separated list without spaces. Examples:
+      request,assign,merge,copy-labels-linked
+      assign,copy-labels-linked
+
+      Default: "assign"
+    required: false
+    default: 'assign'
   reviewers:
     description: >
       The Github team to pull reviewers from. Must be a valid team name from the
-      repository's parent organization.
+      repository's parent organization. REQUIRED to use the "request" action.
 
       For example: "reviewers"
-    required: true
+    required: false
     default: ''
   num_to_request:
     description: >
-      The number of reviewers to request on PRs. Provide an integer.
-    required: true
-    default: 0
-  opt_outs:
-    description: >
-      All scripts are run by default. If you don't want to run a specific
-      script, provide its name here to opt out.
-
-      For example, to opt out of "merge" and "copy-labels-linked":
-      merge,copy-labels-linked
+      The number of reviewers to request on PRs. Provide an integer. REQUIRED to
+      use the "request" action.
     required: false
-    default: ''
+    default: 0
 runs:
   using: "composite"
   steps:
     - run: >
-        if [[ ! "${{ inputs.opt_outs }}" =~ (^|,)"request"(,|$) ]]; then
+        if [[ "${{ inputs.actions }}" =~ (^|,)"merge"(,|$) ]]; then
+          echo " --- MERGE --- " && $GITHUB_ACTION_PATH/src/merge
+        fi
+      shell: bash
+    - run: >
+        if [[ "${{ inputs.actions }}" =~ (^|,)"copy-labels-linked"(,|$) ]]; then
+          echo " --- COPY-LABELS-LINKED --- " && $GITHUB_ACTION_PATH/src/copy-labels-linked
+        fi
+      shell: bash
+    - run: >
+        if [[ "${{ inputs.actions }}" =~ (^|,)"request"(,|$) ]]; then
           echo " --- REQUEST --- " && $GITHUB_ACTION_PATH/src/request "${{ inputs.reviewers }}" "${{ inputs.num_to_request }}"
         fi
       shell: bash
     - run: >
-        if [[ ! "${{ inputs.opt_outs }}" =~ (^|,)"assign"(,|$) ]]; then
+        if [[ "${{ inputs.actions }}" =~ (^|,)"assign"(,|$) ]]; then
           echo " --- ASSIGN --- " && $GITHUB_ACTION_PATH/src/assign
         fi
       shell: bash

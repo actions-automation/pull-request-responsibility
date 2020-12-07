@@ -118,6 +118,22 @@ org = event['organization']['node_id']
 team_name = sys.argv[1]
 num_to_request = sys.argv[2]
 
+# Inputs are optional and default to empty strings; check if they're populated
+# and fail if not.
+if len(team_name) == 0:
+    print("""
+The "reviewers" input is empty. The "request" action requires a valid Github
+team name from the parent organization passed to the "reviewers" input in
+order to function.
+    """)
+    sys.exit(1)
+if len(num_to_request) == 0:
+    print("""
+The "num_to_request" input is empty. The "request" action requires an integer
+number of reviewers to request in order to function.
+    """)
+    sys.exit(1)
+
 # Query the PR for all relevant users and status info.
 try:
     pr_data = githubgql.graphql(QUERY_PR, pr=pr, team=team_name, cursors=QUERY_PR_CURSORS)
