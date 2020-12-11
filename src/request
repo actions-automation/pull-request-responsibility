@@ -94,6 +94,9 @@ def iterusers(nested_dictionary):
     for key, value in nested_dictionary.items():
         if key in ["requestedReviewer", "author"]:
             yield value
+        elif key == "suggestedReviewers":
+            for reviewer in nested_dictionary[key]:
+                yield reviewer["reviewer"]
         elif key == "members":
             for node in nested_dictionary[key]['nodes']:
                 yield node
