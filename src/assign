@@ -1,8 +1,9 @@
 #!/usr/bin/python3
 # SPDX-License-Identifier: Apache-2.0
 
+from githubgql import githubgql
+
 import datetime
-import githubgql
 import json
 import os
 import sys

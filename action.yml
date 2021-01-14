@@ -35,6 +35,10 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - run: python3 -m pip install -qqq --upgrade pip
+      shell: bash
+    - run: python3 -m pip install -qqq githubgql
+      shell: bash
     - run: >
         if [[ "${{ inputs.actions }}" =~ (^|,)"merge"(,|$) ]]; then
           echo " --- MERGE --- " && $GITHUB_ACTION_PATH/src/merge
