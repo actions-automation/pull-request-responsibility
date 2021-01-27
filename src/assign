@@ -85,11 +85,11 @@ def iterusers(nested_dictionary):
     for key, value in nested_dictionary.items():
         if key in ["author", "who"]:
             if len(value) > 0:
-              yield value
+                yield value
         elif key == "assignees":
             for node in nested_dictionary[key]['nodes']:
                 if len(node) > 0:
-                  yield node
+                    yield node
         elif key == "nodes":
             for node in nested_dictionary[key]:
                 yield from iterusers(node)
@@ -141,69 +141,80 @@ def get_responsible(pr):
                 continue
             break
 
-if os.environ["GITHUB_EVENT_NAME"] != "schedule":
-    sys.exit(0)
+def update_assignees(number_to_update=None):
+    "Updates assignees on all repo PRs by default, or a specified PR if input."
 
-org, repo = os.environ["GITHUB_REPOSITORY"].split("/")
+    org, repo = os.environ["GITHUB_REPOSITORY"].split("/")
 
-try:
-    pr_data = githubgql.graphql(QUERY, org=org, repo=repo, cursor=QUERY_CURSORS)
-except githubgql.TokenError as e:
-    print(e.error)
-    sys.exit(0)
-
-# Create a login:id lookup table.
-login_to_id = {u["login"]: u["id"] for u in iterusers(pr_data)}
-
-for pr in pr_data['repository']['pullRequests']['nodes']:
-    slug = f"{org}/{repo}#{pr['number']}"
     try:
-        responsible = set(get_responsible(pr))
-    except Override as e:
-        responsible = set(e.responsible)
+        pr_data = githubgql.graphql(QUERY, org=org, repo=repo, cursor=QUERY_CURSORS)
+    except githubgql.TokenError as e:
+        print(e.error)
+        sys.exit(0)
 
-    assignees = {a['login'] for a in pr['assignees']['nodes']}
+    # Create a login:id lookup table.
+    login_to_id = {u["login"]: u["id"] for u in iterusers(pr_data)}
 
-    remove = assignees - responsible
-    needed = responsible - assignees
+    for pr in pr_data['repository']['pullRequests']['nodes']:
+        if number_to_update not in [pr['number'], None]:
+            continue 
+        slug = f"{org}/{repo}#{pr['number']}"
+        try:
+            responsible = set(get_responsible(pr))
+        except Override as e:
+            responsible = set(e.responsible)
 
-    print(f"{slug}:", end='')
-    for u in needed:
-        print(f" +{u}", end='')
-    for u in remove:
-        print(f" -{u}", end='')
-    print()
+        assignees = {a['login'] for a in pr['assignees']['nodes']}
 
-    if remove:
-        ids_to_remove = [login_to_id[l] for l in remove]
-        input = {
-          "assignableId": pr["id"],
-          "assigneeIds": ids_to_remove
-        }
-        githubgql.graphql(
-            """
-            mutation($input:RemoveAssigneesFromAssignableInput!) {
-                removeAssigneesFromAssignable(input:$input) {
-                    clientMutationId
-                }
+        remove = assignees - responsible
+        needed = responsible - assignees
+
+        print(f"{slug}:", end='')
+        for u in needed:
+            print(f" +{u}", end='')
+        for u in remove:
+            print(f" -{u}", end='')
+        print()
+
+        if remove:
+            ids_to_remove = [login_to_id[l] for l in remove]
+            input = {
+              "assignableId": pr["id"],
+              "assigneeIds": ids_to_remove
             }
-            """,
-            input=input
-        )
-
-    if needed:
-        ids_to_add = [login_to_id[l] for l in needed]
-        input = {
-          "assignableId": pr["id"],
-          "assigneeIds": ids_to_add
-        }
-        githubgql.graphql(
-            """
-            mutation($input:AddAssigneesToAssignableInput!) {
-                addAssigneesToAssignable(input:$input) {
-                    clientMutationId
+            githubgql.graphql(
+                """
+                mutation($input:RemoveAssigneesFromAssignableInput!) {
+                    removeAssigneesFromAssignable(input:$input) {
+                        clientMutationId
+                    }
                 }
+                """,
+                input=input
+            )
+
+        if needed:
+            ids_to_add = [login_to_id[l] for l in needed]
+            input = {
+              "assignableId": pr["id"],
+              "assigneeIds": ids_to_add
             }
-            """,
-            input=input
-        )
+            githubgql.graphql(
+                """
+                mutation($input:AddAssigneesToAssignableInput!) {
+                    addAssigneesToAssignable(input:$input) {
+                        clientMutationId
+                    }
+                }
+                """,
+                input=input
+            )
+
+def main():
+    if os.environ["GITHUB_EVENT_NAME"] != "schedule":
+        sys.exit(0)
+
+    update_assignees()
+
+if __name__ == "__main__":
+    main()

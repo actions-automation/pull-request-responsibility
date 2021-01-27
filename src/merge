@@ -31,41 +31,50 @@ mutation($input: MergePullRequestInput!) {
 }
 '''
 
-if os.environ["GITHUB_EVENT_NAME"] != "schedule":
-  sys.exit(0)
+def merge(number_to_merge=None):
+    owner, repo = os.environ["GITHUB_REPOSITORY"].split("/")
+    cursors = {"cursor": ["repository", "pullRequests"]}
 
-owner, repo = os.environ["GITHUB_REPOSITORY"].split("/")
-cursors = {"cursor": ["repository", "pullRequests"]}
+    try:
+        result = githubgql.graphql(MERGEABLE_QUERY, cursors=cursors, owner=owner, repo=repo)
+    except githubgql.TokenError as e:
+        print(e.error)
+        sys.exit(0)
 
-try:
-    result = githubgql.graphql(MERGEABLE_QUERY, cursors=cursors, owner=owner, repo=repo)
-except githubgql.TokenError as e:
-    print(e.error)
-    sys.exit(0)
+    prs = {i["id"]: i for i in result["repository"]["pullRequests"]["nodes"]}
 
-prs = {i["id"]: i for i in result["repository"]["pullRequests"]["nodes"]}
+    # Print column keys.
+    print("")
+    print(" Expected to merge? | Repository + PR number | Mergeable? | State  ")
+    print("------------------------------------------------------------------")
 
-# Print column keys.
-print("")
-print(" Expected to merge? | Repository + PR number | Mergeable? | State  ")
-print("------------------------------------------------------------------")
+    for (id, pr) in prs.items():
+        if number_to_merge not in [pr['number'], None]:
+            continue 
+        # Status strings.
+        merged_indicator = "✗"
+        pr_identifier = f"{owner}/{repo}#{pr['number']}"
 
-for (id, pr) in prs.items():
-    # Status strings.
-    merged_indicator = "✗"
-    pr_identifier = f"{owner}/{repo}#{pr['number']}"
+        # If all merge criteria pass, PR should be ready to merge.
+        if pr["mergeable"] == "MERGEABLE" and pr["mergeStateStatus"] == "CLEAN":
+            merged_indicator = "✓"
 
-    # If all merge criteria pass, PR should be ready to merge.
-    if pr["mergeable"] == "MERGEABLE" and pr["mergeStateStatus"] == "CLEAN":
-        merged_indicator = "✓"
+        # List the status of the pull request before attempting to merge.
+        print(f" {merged_indicator:19}| {pr_identifier:23}| {str(pr['mergeable']):11}| {pr['mergeStateStatus']:17}")
 
-    # List the status of the pull request before attempting to merge.
-    print(f" {merged_indicator:19}| {pr_identifier:23}| {str(pr['mergeable']):11}| {pr['mergeStateStatus']:17}")
+        # Attempt to merge the PR if ready.
+        if merged_indicator == "✓":
+            githubgql.graphql(MERGE_MUTATION, input={
+                    "pullRequestId": id,
+                    "mergeMethod": "REBASE"
+                }
+            )
 
-    # Attempt to merge the PR if ready.
-    if merged_indicator == "✓":
-        githubgql.graphql(MERGE_MUTATION, input={
-                "pullRequestId": id,
-                "mergeMethod": "REBASE"
-            }
-        )
+def main():
+    if os.environ["GITHUB_EVENT_NAME"] != "schedule":
+        sys.exit(0)
+
+    merge()
+
+if __name__ == "__main__":
+    main()

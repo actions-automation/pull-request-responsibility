@@ -12,6 +12,9 @@ QUERY_PR = """
 query($pr:ID!, $team:String!, $reviewRequestsCursor:String, $reviewsCursor:String, $teamMembersCursor:String) {
     node(id:$pr) {
         ... on PullRequest {
+            author {
+                ...userData
+            }
             number
             suggestedReviewers {
                 reviewer {
@@ -107,85 +110,93 @@ def iterusers(nested_dictionary):
         elif type(value) is dict:
             yield from iterusers(value)
 
-if os.environ["GITHUB_EVENT_NAME"] != "pull_request_target":
-    sys.exit(0)
+def auto_request(pr, org):
+    team_name = sys.argv[1]
+    num_to_request = sys.argv[2]
 
-with open(os.environ["GITHUB_EVENT_PATH"]) as f:
-    event = json.load(f)
+    # Inputs are optional and default to empty strings; check if they're populated
+    # and fail if not.
+    if len(team_name) == 0:
+        print("""
+    The "reviewers" input is empty. The "request" action requires a valid Github
+    team name from the parent organization passed to the "reviewers" input in
+    order to function.
+        """)
+        sys.exit(1)
+    if len(num_to_request) == 0:
+        print("""
+    The "num_to_request" input is empty. The "request" action requires an integer
+    number of reviewers to request in order to function.
+        """)
+        sys.exit(1)
 
-if event["action"] not in {"opened", "reopened"}:
-    sys.exit(0)
+    # Query the PR for all relevant users and status info.
+    try:
+        pr_data = githubgql.graphql(QUERY_PR, pr=pr, team=team_name, cursors=QUERY_PR_CURSORS)
+    except githubgql.TokenError as e:
+        print(e.error)
+        sys.exit(0)
 
-# Extract relevant data from event/environment.
-pr = event['pull_request']['node_id']
-org = event['organization']['node_id']
-team_name = sys.argv[1]
-num_to_request = sys.argv[2]
+    # Create lookup tables for ease of use.
+    login_to_id = {u["login"]: u["id"] for u in iterusers(pr_data)}
+    availability = {u["login"]: u["status"] for u in iterusers(pr_data)}
 
-# Inputs are optional and default to empty strings; check if they're populated
-# and fail if not.
-if len(team_name) == 0:
-    print("""
-The "reviewers" input is empty. The "request" action requires a valid Github
-team name from the parent organization passed to the "reviewers" input in
-order to function.
-    """)
-    sys.exit(1)
-if len(num_to_request) == 0:
-    print("""
-The "num_to_request" input is empty. The "request" action requires an integer
-number of reviewers to request in order to function.
-    """)
-    sys.exit(1)
+    # All members of the specified `reviews` team in the parent org.
+    potential_reviewers = {u["login"] for u in pr_data['node']['baseRepository']['owner']['team']['members']['nodes']}
 
-# Query the PR for all relevant users and status info.
-try:
-    pr_data = githubgql.graphql(QUERY_PR, pr=pr, team=team_name, cursors=QUERY_PR_CURSORS)
-except githubgql.TokenError as e:
-    print(e.error)
-    sys.exit(0)
+    # All currently requested reviewers.
+    requested = {r['author']['login'] for r in pr_data['node']['reviews']['nodes']}
+    requested |= {r['requestedReviewer']['login'] for r in pr_data['node']['reviewRequests']['nodes']}
 
-# Create lookup tables for ease of use.
-login_to_id = {u["login"]: u["id"] for u in iterusers(pr_data)}
-availability = {u["login"]: u["status"] for u in iterusers(pr_data)}
+    # Get our categories.
+    reviewers = potential_reviewers.copy()
+    suggested = {s['reviewer']['login'] for s in pr_data['node']['suggestedReviewers']}
+    authors = {pr_data['node']['author']['login']}
 
-# All members of the specified `reviews` team in the parent org.
-potential_reviewers = {u["login"] for u in pr_data['node']['baseRepository']['owner']['team']['members']['nodes']}
+    # Make sure categories are mutually exclusive.
+    reviewers -= authors | suggested
+    suggested -= authors
 
-# All currently requested reviewers.
-requested = {r['author']['login'] for r in pr_data['node']['reviews']['nodes']}
-requested |= {r['requestedReviewer']['login'] for r in pr_data['node']['reviewRequests']['nodes']}
+    requesting = requested.copy()     # Existing reviewers
+    if len(requesting) < int(num_to_request):
+        migrate(requesting, suggested, len(requesting) + 1) # Get one suggested.
+    migrate(requesting, reviewers, int(num_to_request)) # Get some non-suggested.
+    migrate(requesting, suggested, int(num_to_request)) # Backfill from suggested.
 
-# Get our categories.
-reviewers = potential_reviewers.copy()
-suggested = {s['reviewer']['login'] for s in pr_data['node']['suggestedReviewers']}
-authors = {event['pull_request']['user']['login']}
+    # Print status.
+    print(f"{os.environ['GITHUB_REPOSITORY']}#{pr_data['node']['number']}:", end="")
+    for user in sorted(requesting):
+        state = "" if user in requested else "+"
+        print(f" {state}{user}", end="")
+    print()
 
-# Make sure categories are mutually exclusive.
-reviewers -= authors | suggested
-suggested -= authors
+    # Construct the final list of people to request as reviewers.
+    to_request = [login_to_id[r] for r in requesting - requested]
 
-requesting = requested.copy()     # Existing reviewers
-if len(requesting) < int(num_to_request):
-    migrate(requesting, suggested, len(requesting) + 1) # Get one suggested.
-migrate(requesting, reviewers, int(num_to_request)) # Get some non-suggested.
-migrate(requesting, suggested, int(num_to_request)) # Backfill from suggested.
+    if len(to_request) > 0:
+        # Make the request to Github.
+        githubgql.graphql(MUTATION_REQUEST_REVIEW, input={
+            "pullRequestId": pr,
+            "userIds": to_request,
+            "teamIds": [],
+            "union": True
+        })
 
-# Print status.
-print(f"{os.environ['GITHUB_REPOSITORY']}#{pr_data['node']['number']}:", end="")
-for user in sorted(requesting):
-    state = "" if user in requested else "+"
-    print(f" {state}{user}", end="")
-print()
+def main():
+    if os.environ["GITHUB_EVENT_NAME"] != "pull_request_target":
+        sys.exit(0)
 
-# Construct the final list of people to request as reviewers.
-to_request = [login_to_id[r] for r in requesting - requested]
+    with open(os.environ["GITHUB_EVENT_PATH"]) as f:
+        event = json.load(f)
 
-if len(to_request) > 0:
-    # Make the request to Github.
-    githubgql.graphql(MUTATION_REQUEST_REVIEW, input={
-        "pullRequestId": pr,
-        "userIds": to_request,
-        "teamIds": [],
-        "union": True
-    })
+    if event["action"] not in {"opened", "reopened"}:
+        sys.exit(0)
+
+    # Extract relevant data from event/environment.
+    pr = event['pull_request']['node_id']
+    org = event['organization']['node_id']
+
+    auto_request(pr, org)
+
+if __name__ == "__main__":
+    main()
