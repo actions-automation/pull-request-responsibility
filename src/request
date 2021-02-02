@@ -78,7 +78,7 @@ mutation($input:RequestReviewsInput!) {
 }
 """
 
-def migrate(dst, src, max=None):
+def migrate(dst, src, availability, max=None):
     "Moves random users from src to dst until src is exhausted or dst is full."
 
     # Randomly selected users who have set their GitHub status to `busy` are
@@ -159,9 +159,9 @@ def auto_request(pr, org):
 
     requesting = requested.copy()     # Existing reviewers
     if len(requesting) < int(num_to_request):
-        migrate(requesting, suggested, len(requesting) + 1) # Get one suggested.
-    migrate(requesting, reviewers, int(num_to_request)) # Get some non-suggested.
-    migrate(requesting, suggested, int(num_to_request)) # Backfill from suggested.
+        migrate(requesting, suggested, availability, len(requesting) + 1) # Get one suggested.
+    migrate(requesting, reviewers, availability, int(num_to_request)) # Get some non-suggested.
+    migrate(requesting, suggested, availability, int(num_to_request)) # Backfill from suggested.
 
     # Print status.
     print(f"{os.environ['GITHUB_REPOSITORY']}#{pr_data['node']['number']}:", end="")
