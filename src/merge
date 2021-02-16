@@ -36,7 +36,7 @@ def merge(number_to_merge=None):
     cursors = {"cursor": ["repository", "pullRequests"]}
 
     try:
-        result = githubgql.graphql(MERGEABLE_QUERY, cursors=cursors, owner=owner, repo=repo)
+        result = githubgql.graphql(MERGEABLE_QUERY, accept="application/vnd.github.merge-info-preview+json", cursors=cursors, owner=owner, repo=repo)
     except githubgql.TokenError as e:
         print(e.error)
         sys.exit(0)
