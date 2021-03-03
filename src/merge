@@ -10,7 +10,7 @@ import os
 MERGEABLE_QUERY = '''
 query($owner:String!, $repo:String!, $cursor:String) {
   repository(owner: $owner, name: $repo) {
-    pullRequests(states: OPEN, first: 100, after:$cursor) {
+    pullRequests(states: OPEN, first: 10, after:$cursor) {
       pageInfo { endCursor hasNextPage }
       nodes {
         id
