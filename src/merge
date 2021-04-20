@@ -33,10 +33,11 @@ mutation($input: MergePullRequestInput!) {
 
 def merge(number_to_merge=None):
     owner, repo = os.environ["GITHUB_REPOSITORY"].split("/")
+    token = os.environ.get('BOT_TOKEN', None)
     cursors = {"cursor": ["repository", "pullRequests"]}
 
     try:
-        result = githubgql.graphql(MERGEABLE_QUERY, accept="application/vnd.github.merge-info-preview+json", cursors=cursors, owner=owner, repo=repo)
+        result = githubgql.graphql(MERGEABLE_QUERY, token=token, accept="application/vnd.github.merge-info-preview+json", cursors=cursors, owner=owner, repo=repo)
     except githubgql.TokenError as e:
         print(e.error)
         sys.exit(0)
@@ -64,7 +65,7 @@ def merge(number_to_merge=None):
 
         # Attempt to merge the PR if ready.
         if merged_indicator == "✓":
-            githubgql.graphql(MERGE_MUTATION, input={
+            githubgql.graphql(MERGE_MUTATION, token=token, input={
                     "pullRequestId": id,
                     "mergeMethod": "REBASE"
                 }

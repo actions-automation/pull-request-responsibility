@@ -88,11 +88,13 @@ def get_related_issues(body, commits):
 
 def copy_labels_linked(id):
     owner, repo = os.environ["GITHUB_REPOSITORY"].split("/")
+    token = os.environ.get('BOT_TOKEN', None)
 
     # Get PR data and open issues in the repo.
     try:
         result = githubgql.graphql(
             QUERY,
+            token=token,
             id=id,
             org=owner,
             repo=repo,
@@ -145,6 +147,7 @@ def copy_labels_linked(id):
                 }
             }
             """,
+            token=token,
             input={
                 "labelableId": result['node']['id'],
                 "labelIds": unset_labels_ids

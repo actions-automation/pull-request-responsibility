@@ -145,9 +145,10 @@ def update_assignees(number_to_update=None):
     "Updates assignees on all repo PRs by default, or a specified PR if input."
 
     org, repo = os.environ["GITHUB_REPOSITORY"].split("/")
+    token = os.environ.get('BOT_TOKEN', None)
 
     try:
-        pr_data = githubgql.graphql(QUERY, org=org, repo=repo, cursor=QUERY_CURSORS)
+        pr_data = githubgql.graphql(QUERY, token=token, org=org, repo=repo, cursor=QUERY_CURSORS)
     except githubgql.TokenError as e:
         print(e.error)
         sys.exit(0)
@@ -190,6 +191,7 @@ def update_assignees(number_to_update=None):
                     }
                 }
                 """,
+                token=token,
                 input=input
             )
 
@@ -207,6 +209,7 @@ def update_assignees(number_to_update=None):
                     }
                 }
                 """,
+                token=token,
                 input=input
             )
 

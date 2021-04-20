@@ -110,7 +110,7 @@ def iterusers(nested_dictionary):
         elif type(value) is dict:
             yield from iterusers(value)
 
-def auto_request(pr, org):
+def auto_request(pr, org, token):
     team_name = sys.argv[1]
     num_to_request = sys.argv[2]
 
@@ -132,7 +132,7 @@ def auto_request(pr, org):
 
     # Query the PR for all relevant users and status info.
     try:
-        pr_data = githubgql.graphql(QUERY_PR, pr=pr, team=team_name, cursors=QUERY_PR_CURSORS)
+        pr_data = githubgql.graphql(QUERY_PR, token=token, pr=pr, team=team_name, cursors=QUERY_PR_CURSORS)
     except githubgql.TokenError as e:
         print(e.error)
         sys.exit(0)
@@ -175,7 +175,7 @@ def auto_request(pr, org):
 
     if len(to_request) > 0:
         # Make the request to Github.
-        githubgql.graphql(MUTATION_REQUEST_REVIEW, input={
+        githubgql.graphql(MUTATION_REQUEST_REVIEW, token=token, input={
             "pullRequestId": pr,
             "userIds": to_request,
             "teamIds": [],
@@ -195,8 +195,9 @@ def main():
     # Extract relevant data from event/environment.
     pr = event['pull_request']['node_id']
     org = event['organization']['node_id']
+    token = os.environ.get('BOT_TOKEN', None)
 
-    auto_request(pr, org)
+    auto_request(pr, org, token)
 
 if __name__ == "__main__":
     main()
