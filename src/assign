@@ -214,7 +214,7 @@ def update_assignees(number_to_update=None):
             )
 
 def main():
-    if os.environ["GITHUB_EVENT_NAME"] != "schedule":
+    if os.environ["GITHUB_EVENT_NAME"] not in ["schedule", "workflow_dispatch"]:
         sys.exit(0)
 
     update_assignees()
