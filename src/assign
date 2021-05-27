@@ -141,11 +141,10 @@ def get_responsible(pr):
                 continue
             break
 
-def update_assignees(number_to_update=None):
+def update_assignees(token, number_to_update=None):
     "Updates assignees on all repo PRs by default, or a specified PR if input."
 
     org, repo = os.environ["GITHUB_REPOSITORY"].split("/")
-    token = os.environ.get('BOT_TOKEN', None)
 
     try:
         pr_data = githubgql.graphql(QUERY, token=token, org=org, repo=repo, cursor=QUERY_CURSORS)
@@ -158,7 +157,7 @@ def update_assignees(number_to_update=None):
 
     for pr in pr_data['repository']['pullRequests']['nodes']:
         if number_to_update not in [pr['number'], None]:
-            continue 
+            continue
         slug = f"{org}/{repo}#{pr['number']}"
         try:
             responsible = set(get_responsible(pr))
@@ -217,7 +216,11 @@ def main():
     if os.environ["GITHUB_EVENT_NAME"] not in ["schedule", "workflow_dispatch"]:
         sys.exit(0)
 
-    update_assignees()
+    token = sys.argv[1]
+    if len(token) == 0:
+        token = os.environ.get('BOT_TOKEN', None)
+
+    update_assignees(token=token)
 
 if __name__ == "__main__":
     main()

@@ -86,9 +86,8 @@ def get_related_issues(body, commits):
         for verb, num in regex.findall(c["commit"]["message"]):
             yield int(num)
 
-def copy_labels_linked(id):
+def copy_labels_linked(token, id):
     owner, repo = os.environ["GITHUB_REPOSITORY"].split("/")
-    token = os.environ.get('BOT_TOKEN', None)
 
     # Get PR data and open issues in the repo.
     try:
@@ -164,9 +163,13 @@ def main():
     if event["action"] not in {"opened", "reopened"}:
         sys.exit(0)
 
+    token = sys.argv[1]
+    if len(token) == 0:
+        token = os.environ.get('BOT_TOKEN', None)
+
     id = event['pull_request']['node_id']
 
-    copy_labels_linked(id)
+    copy_labels_linked(token=token, id=id)
 
 if __name__ == "__main__":
     main()

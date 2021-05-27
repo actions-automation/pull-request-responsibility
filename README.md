@@ -6,6 +6,19 @@
 
 Each of these actions are discrete, and can be enabled separately if desired.
 
+### `assign`: Automatically adjust PR assignees based on who is most responsible for pushing it forward
+
+The heart and soul of the toolset: this action will automatically adjust assignees on a pull request such that the current assignees are the ones that must take action to move the pull request forward. Here's an example timeline of actions for a PR submitted by author X:
+
+- PR from author X arrives. Any requested reviewers (let's say reviewers A, B, and C) are assigned.
+- Reviewer A leaves a review requesting changes. Reviewers A, B, and C are unassigned, and author X is assigned to address A's review.
+- X makes changes to the PR and re-requests review from reviewer A. Since there are no outstanding Changes Requested reviews, all requested reviewers that haven't yet approved (A, B, C) are put back on the PR.
+- Reviewer B approves the PR, and is unassigned. Reviewers A and C are still assigned.
+- Reviewer C approves the PR, and is unassigned. Reviewer A is still assigned.
+- etc...
+
+In effect, this turns Github's Assignee field from a vague "point person" to a clear indicator of responsibility.
+
 ### `request`: Automatically request reviewers on new pull requests
 
 When a new PR arrives, this action will request a (configurable) number of reviewers, pulling from a mixture of:
@@ -20,20 +33,7 @@ Inputs:
 - `reviewers`: the team name to pull reviewers from in the parent repo's organization
 - `num_to_request`: the number of reviewers to request on new PRs
 
-You can see an example of how inputs should be specified in the example workflow below.
-
-### `assign`: Automatically adjust PR assignees based on who is most responsible for pushing it forward
-
-The heart and soul of the toolset: this action will automatically adjust assignees on a pull request such that the current assignees are the ones that must take action to move the pull request forward. Here's an example timeline of actions for a PR submitted by author X:
-
-- PR from author X arrives. Any requested reviewers (let's say reviewers A, B, and C) are assigned.
-- Reviewer A leaves a review requesting changes. Reviewers A, B, and C are unassigned, and author X is assigned to address A's review.
-- X makes changes to the PR and re-requests review from reviewer A. Since there are no outstanding Changes Requested reviews, all requested reviewers that haven't yet approved (A, B, C) are put back on the PR.
-- Reviewer B approves the PR, and is unassigned. Reviewers A and C are still assigned.
-- Reviewer C approves the PR, and is unassigned. Reviewer A is still assigned.
-- etc...
-
-In effect, this turns Github's Assignee field from a vague "point person" to a clear indicator of responsibility.
+You can see an example of how inputs should be specified in the Usage section below.
 
 ### `copy-labels-linked`: Copy any labels present on linked issues to PRs
 
@@ -45,26 +45,9 @@ When a pull request meets a repo's configured criteria for [mergeability](https:
 
 ## Usage
 
-Setup takes just a few straightforward steps.
+In most cases, all you need to start using `actions-automation` is a single workflow!
 
-### Authenticating with Github
-
-Many `actions-automation` actions rely on a [personal access token](https://docs.github.com/en/free-pro-team@latest/github/authenticating-to-github/creating-a-personal-access-token)
-to interact with Github and work their magic. If you're setting up a new
-repository for use with `actions-automation` tools, you'll need to provision one with the `public_repo`, `read:org`, and `write:org`
-scopes enabled and make it available as a [shared secret](https://docs.github.com/en/free-pro-team@latest/actions/reference/encrypted-secrets)
-to your repository, using the name `BOT_TOKEN`. (Organization-wide secrets also work.)
-
-Github _strongly_
-[recommends](https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/security-hardening-for-github-actions#considering-cross-repository-access)
-creating a separate account for PATs like this, and scoping access to that
-account accordingly.
-
-### Enabling `pull-request-responsibility` on a repository
-
-Once a token is available to your repo, the final step is to enable `pull-request-responsibility` via
-Github Actions. To do so, create a new workflow under `.github/workflows` with
-the following structure:
+Create a new workflow `yml` under `.github/workflows` with the following structure:
 
 ```yml
 name: pull-request-responsibility
@@ -115,22 +98,72 @@ on:
 jobs:
   pull-request-responsibility:
     runs-on: ubuntu-latest
-    env:
-      BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
     name: pull-request-responsibility
     steps:
       - uses: actions-automation/pull-request-responsibility@main
         with:
-          actions: "request,assign,copy-labels-linked,merge" # The actions to run.
-          reviewers: "reviews" # The team to pull reviewers from for `request`.
-          num_to_request: 3 # The number of reviewers that `request` should request on new PRs.
-
+          actions: "assign,copy-labels-linked,merge" # The actions to run.
+          token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-Note that you'll need to configure the action's inputs accordingly. If none are provided, only the `assign` action will run by default; the rest are opt-in. The other parameters are required for the `request` action, if enabled.
+Note that you'll need to configure the action's inputs accordingly. If none are provided, only the `assign` action will run by default; the rest are opt-in via the `actions` input. Additionally, you'll need to provide a Github access token; the `GITHUB_TOKEN` should suffice for most cases.
 
 Once this is in place, you're done! `pull-request-responsibility` should begin working on your repo
 when certain events (ex. an issue/PR gets opened) happen.
+
+### Enabling the `request` action
+
+You may have noticed that the `request` action is not included in the workflow above. That's because it performs cross-repo API calls and needs some additional setup.
+
+### Github authentication with a personal access token
+
+The Actions-provided `GITHUB_TOKEN` secret is good for most of what `pull-request-responsibility` does, but it does not have permission to read or write data from outside the repository that spawned it. This poses a problem with the `request` action, which looks at things like user availability and organization-level teams.
+
+In order for `request` to function correctly, we'll need to authenticate with Github using a **personal access token** instead of the `GITHUB_TOKEN`. These are user-generated and effectively allow scripts to act as a user through the Github API. You can manage your active tokens [here](https://github.com/settings/tokens).
+
+Provision one with the `public_repo`, `read:org`, and `write:org` scopes enabled and make it available as a [shared secret](https://docs.github.com/en/free-pro-team@latest/actions/reference/encrypted-secrets)
+to your repository, using the name `BOT_TOKEN`. (Organization-wide secrets also work.)
+
+Github _strongly_
+[recommends](https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/security-hardening-for-github-actions#considering-cross-repository-access)
+creating a separate account for PATs like this, and scoping access to that
+account accordingly. It's recommended to heed their advice; PATs are dangerous if leaked, and can result in malicious actors abusing the account that created it.
+
+If you're using any other `actions-automation` tools, chances are this step will be necessary as well. Once the token is available as a secret, however, it should be straightforward to use it in perpetuity.
+
+### Enabling `request` in your workflow
+
+With the repository secret available, replace the `token` input with your new PAT:
+
+```yml
+token: ${{ secrets.BOT_TOKEN }}
+```
+
+You'll also need to provide some additional inputs for the action to work (documented in its description):
+
+```yml
+reviewers: "reviews" # The team to pull reviewers from for `request`.
+num_to_request: 3 # The number of reviewers that `request` should request on new PRs.
+```
+
+And, finally, enable the action in the `actions` input:
+
+```yml
+actions: "request,assign,copy-labels-linked,merge" # The actions to run.
+```
+
+Your completed step should look something like this:
+
+```yml
+- uses: actions-automation/pull-request-responsibility@main
+  with:
+    actions: "request,assign,copy-labels-linked,merge" # The actions to run.
+    token: ${{ secrets.BOT_TOKEN }}
+    reviewers: "reviews" # The team to pull reviewers from for `request`.
+    num_to_request: 3 # The number of reviewers that `request` should request on new PRs.
+```
+
+And you should be done!
 
 ## FAQ
 
@@ -143,15 +176,6 @@ attempt to do label management until that PR has been labeled.
 The action doesn't _need_ every trigger to work properly -- in fact, it doesn't
 use most of them at all. However, there's little downside to enabling all of
 them, and doing so avoids the need to change workflows if new functionality using a new trigger is added.
-
-### What happens if I don't set `BOT_TOKEN` properly?
-
-If `pull-request-responsibility` can't find a valid token under `BOT_TOKEN`, it will fail gracefully
-with a note reminding you to add one if you want to opt into automation. It
-should _not_ send you a failure email about it.
-
-This avoids forks of repositories that have `pull-request-responsibility` enabled from spamming their
-authors with needless Actions failure emails about improperly-set credentials.
 
 ## Credits
 

@@ -18,6 +18,15 @@ inputs:
       Default: "assign"
     required: false
     default: 'assign'
+  token:
+    description: >
+      A Github access token. Needed in order to read data from and write to
+      Github.
+
+      In most cases, the GITHUB_TOKEN will suffice; however, to use the full
+      feature set of the "request" action, a properly-scoped PAT is required.
+    required: false
+    default: ''
   reviewers:
     description: >
       The Github team to pull reviewers from. Must be a valid team name from the
@@ -41,22 +50,22 @@ runs:
       shell: bash
     - run: >
         if [[ "${{ inputs.actions }}" =~ (^|,)"merge"(,|$) ]]; then
-          echo " --- MERGE --- " && $GITHUB_ACTION_PATH/src/merge
+          echo " --- MERGE --- " && $GITHUB_ACTION_PATH/src/merge "${{ inputs.token }}"
         fi
       shell: bash
     - run: >
         if [[ "${{ inputs.actions }}" =~ (^|,)"copy-labels-linked"(,|$) ]]; then
-          echo " --- COPY-LABELS-LINKED --- " && $GITHUB_ACTION_PATH/src/copy-labels-linked
+          echo " --- COPY-LABELS-LINKED --- " && $GITHUB_ACTION_PATH/src/copy-labels-linked "${{ inputs.token }}"
         fi
       shell: bash
     - run: >
         if [[ "${{ inputs.actions }}" =~ (^|,)"request"(,|$) ]]; then
-          echo " --- REQUEST --- " && $GITHUB_ACTION_PATH/src/request "${{ inputs.reviewers }}" "${{ inputs.num_to_request }}"
+          echo " --- REQUEST --- " && $GITHUB_ACTION_PATH/src/request "${{ inputs.token }}" "${{ inputs.reviewers }}" "${{ inputs.num_to_request }}"
         fi
       shell: bash
     - run: >
         if [[ "${{ inputs.actions }}" =~ (^|,)"assign"(,|$) ]]; then
-          echo " --- ASSIGN --- " && $GITHUB_ACTION_PATH/src/assign
+          echo " --- ASSIGN --- " && $GITHUB_ACTION_PATH/src/assign "${{ inputs.token }}"
         fi
       shell: bash
     - run: bash -c "env | sort"

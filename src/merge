@@ -31,9 +31,8 @@ mutation($input: MergePullRequestInput!) {
 }
 '''
 
-def merge(number_to_merge=None):
+def merge(token, number_to_merge=None):
     owner, repo = os.environ["GITHUB_REPOSITORY"].split("/")
-    token = os.environ.get('BOT_TOKEN', None)
     cursors = {"cursor": ["repository", "pullRequests"]}
 
     try:
@@ -51,7 +50,7 @@ def merge(number_to_merge=None):
 
     for (id, pr) in prs.items():
         if number_to_merge not in [pr['number'], None]:
-            continue 
+            continue
         # Status strings.
         merged_indicator = "✗"
         pr_identifier = f"{owner}/{repo}#{pr['number']}"
@@ -75,7 +74,11 @@ def main():
     if os.environ["GITHUB_EVENT_NAME"] != "schedule":
         sys.exit(0)
 
-    merge()
+    token = sys.argv[1]
+    if len(token) == 0:
+        token = os.environ.get('BOT_TOKEN', None)
+
+    merge(token=token)
 
 if __name__ == "__main__":
     main()
